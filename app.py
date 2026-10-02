@@ -6,6 +6,9 @@ import streamlit.components.v1 as components
 
 DB_NAME = 'torneio_xadrez.db'
 
+# URL pública da imagem do logótipo da EBM Denise Christiane Harms
+LOGO_URL = 'https://i.ibb.co/3ykXG3G/logo-denise-harms.png'
+
 # -----------------------------------------------------------------------------
 # 1. BANCO DE DADOS (SQLITE)
 # -----------------------------------------------------------------------------
@@ -116,20 +119,23 @@ class SistemaElo:
 
 
 # -----------------------------------------------------------------------------
-# 3. INTERFACE PRINCIPAL COM LOGÓTIPO
+# 3. INTERFACE PRINCIPAL
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title='Clube de Xadrez Denise Harms', page_icon='♟️', layout='wide'
 )
 
-# Inserção do logótipo no canto superior esquerdo
-col_logo, col_titulo = st.columns([1, 6])
+# Renderização do logótipo e título
+col_logo, col_titulo = st.columns([1, 5])
 
 with col_logo:
   try:
-    st.image('logo.png', width=110)
+    st.image('logo.png', width=120)
   except Exception:
-    st.write('♟️')
+    try:
+      st.image(LOGO_URL, width=120)
+    except Exception:
+      st.write('♟️')
 
 with col_titulo:
   st.title('Clube de Xadrez Denise Harms')
@@ -137,18 +143,20 @@ with col_titulo:
       'Sistema de Torneios Escolares, Emparceiramento Suíço & Rating Elo'
   )
 
+st.write('---')
+
 aba = st.sidebar.radio(
     'Navegação',
     [
         '👥 Inscrição de Jogadores',
-        '⚔️ Emparceiramento & Partidas',
+        '⚔️️ Emparceiramento & Partidas',
         '📊 Classificação & Ranking',
         '⏱️ Cronômetro da Sala',
     ],
 )
 
 # -----------------------------------------------------------------------------
-# ABA 1: INSCRIÇÃO DE JOGADORES
+# ABA 1: INSCRIÇÃO DE JOGADORES (COM EXCLUSÃO INDIVIDUAL)
 # -----------------------------------------------------------------------------
 if aba == '👥 Inscrição de Jogadores':
   st.header('Cadastrar Alunos e Criar Torneios por Turma')
@@ -277,12 +285,51 @@ if aba == '👥 Inscrição de Jogadores':
     st.dataframe(df_torneios_view, use_container_width=True)
 
   with col_v2:
-    st.write('### ⚙️ Opções de Exclusão')
+    st.write('### ⚙️ Gerenciamento e Exclusão')
     if not df_jogadores.empty:
-      turmas_existentes = df_jogadores['turma'].unique().tolist()
-      turma_del = st.selectbox('Selecione uma turma:', turmas_existentes)
 
-      if st.button('🗑️ Excluir Turma e seus Alunos', type='secondary'):
+      # 1. EXCLUIR APENAS UM ALUNO (NOVO)
+      st.markdown('#### 👤 Excluir um Aluno Específico')
+      # Cria rótulo amigável: "Nome do Aluno (Turma)"
+      df_jogadores['label_aluno'] = (
+          df_jogadores['nome'] + ' (' + df_jogadores['turma'] + ')'
+      )
+      dict_alunos = dict(
+          zip(df_jogadores['label_aluno'], df_jogadores['id'])
+      )
+
+      aluno_selecionado_label = st.selectbox(
+          'Selecione o aluno para remover:',
+          options=list(dict_alunos.keys()),
+      )
+      aluno_id_del = dict_alunos[aluno_selecionado_label]
+
+      if st.button('🗑️ Excluir Aluno Selecionado', type='secondary'):
+        with get_connection() as conn:
+          cursor = conn.cursor()
+          # Excluir partidas vinculadas ao aluno
+          cursor.execute(
+              'DELETE FROM partidas WHERE brancas_id = ? OR pretas_id = ?;',
+              (aluno_id_del, aluno_id_del),
+          )
+          # Excluir jogador
+          cursor.execute(
+              'DELETE FROM jogadores WHERE id = ?;', (aluno_id_del,)
+          )
+          conn.commit()
+        st.success(f'Aluno "{aluno_selecionado_label}" removido com sucesso!')
+        st.rerun()
+
+      st.write('---')
+
+      # 2. EXCLUIR UMA TURMA INTEIRA
+      st.markdown('#### 🏫 Excluir Turma Inteira')
+      turmas_existentes = df_jogadores['turma'].unique().tolist()
+      turma_del = st.selectbox(
+          'Selecione a turma para remover:', turmas_existentes
+      )
+
+      if st.button('🗑️ Excluir Turma e Todos os seus Alunos', type='secondary'):
         with get_connection() as conn:
           cursor = conn.cursor()
           cursor.execute(
@@ -299,6 +346,9 @@ if aba == '👥 Inscrição de Jogadores':
         st.success(f'Turma "{turma_del}" removida!')
         st.rerun()
 
+      st.write('---')
+
+      # 3. RESETAR BANCO DE DADOS COMPLETO
       if st.button('💥 RESETAR TODO O BANCO DE DADOS', type='primary'):
         with get_connection() as conn:
           cursor = conn.cursor()
@@ -361,7 +411,7 @@ elif aba == '⚔️ Emparceiramento & Partidas':
 
     if total_alunos_turma < 2:
       st.error(
-          f'⚠️ A turma "{turma_nome}" possui apenas {total_alunos_turma}'
+          f'⚠️️ A turma "{turma_nome}" possui apenas {total_alunos_turma}'
           ' aluno(s) cadastrado(s). Cadastre pelo menos 2 alunos para iniciar o'
           ' torneio.'
       )
@@ -785,7 +835,7 @@ elif aba == '📊 Classificação & Ranking':
 # -----------------------------------------------------------------------------
 # ABA 4: CRONÔMETRO
 # -----------------------------------------------------------------------------
-elif aba == '⏱️️ Cronômetro da Sala':
+elif aba == '⏱️ Cronômetro da Sala':
   st.subheader('⏱️ Temporizador da Rodada (Projeção)')
   minutos = st.number_input(
       'Tempo da Rodada (minutos):', min_value=1, max_value=120, value=15, step=1
