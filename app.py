@@ -7,7 +7,7 @@ import streamlit.components.v1 as components
 DB_NAME = 'torneio_xadrez.db'
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURAÇÃO DO BANCO DE DADOS (SQLITE)
+# 1. BANCO DE DADOS (SQLITE + MIGRAÇÕES AUTOMÁTICAS)
 # -----------------------------------------------------------------------------
 
 
@@ -45,25 +45,27 @@ def inicializar_banco():
             )
         """)
 
-    # Tabela de Partidas / Rodadas
+    # Tabela de Partidas
     cursor.execute("""
             CREATE TABLE IF NOT EXISTS partidas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                torneio_id INTEGER,
                 rodada INTEGER NOT NULL,
                 mesa INTEGER NOT NULL,
                 brancas_id INTEGER NOT NULL,
                 pretas_id INTEGER,
                 resultado TEXT,
                 variacao_elo_brancas INTEGER DEFAULT 0,
-                variacao_elo_pretas INTEGER DEFAULT 0,
-                FOREIGN KEY (torneio_id) REFERENCES torneios (id) ON DELETE CASCADE,
-                FOREIGN KEY (brancas_id) REFERENCES jogadores (id) ON DELETE CASCADE,
-                FOREIGN KEY (pretas_id) REFERENCES jogadores (id) ON DELETE CASCADE
+                variacao_elo_pretas INTEGER DEFAULT 0
             )
         """)
 
-    # AUTO-CRIAÇÃO DE TORNEIOS PARA TURMAS EXISTENTES (Sincronização Retroativa)
+    # Migração automática: garante a coluna torneio_id
+    cursor.execute("PRAGMA table_info('partidas');")
+    colunas = [col[1] for col in cursor.fetchall()]
+    if 'torneio_id' not in colunas:
+      cursor.execute('ALTER TABLE partidas ADD COLUMN torneio_id INTEGER;')
+
+    # Auto-criação retroativa de torneios para turmas existentes
     cursor.execute('SELECT DISTINCT turma FROM jogadores;')
     turmas_existentes = cursor.fetchall()
     for (t_nome,) in turmas_existentes:
@@ -103,7 +105,7 @@ class SistemaElo:
 
 
 # -----------------------------------------------------------------------------
-# 3. INTERFACE PRINCIPAL (STREAMLIT)
+# 3. INTERFACE STREAMLIT
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title='Gestão de Torneio Escolar de Xadrez', page_icon='♟️', layout='wide'
@@ -122,7 +124,7 @@ aba = st.sidebar.radio(
 )
 
 # -----------------------------------------------------------------------------
-# ABA 1: INSCRIÇÃO E GERENCIAMENTO DE JOGADORES / TORNEIOS
+# ABA 1: INSCRIÇÃO E GERENCIAMENTO DE JOGADORES / TURMAS
 # -----------------------------------------------------------------------------
 if aba == '👥 Inscrição de Jogadores':
   st.header('Cadastrar Alunos e Criar Torneios por Turma')
@@ -163,13 +165,11 @@ if aba == '👥 Inscrição de Jogadores':
 
         with get_connection() as conn:
           cursor = conn.cursor()
-          # Criar torneio para a turma
           cursor.execute(
               'INSERT OR IGNORE INTO torneios (nome, turma) VALUES (?, ?);',
               (nome_torneio, turma_limpa),
           )
 
-          # Cadastrar os alunos
           for nome in nomes:
             cursor.execute(
                 """
@@ -239,7 +239,6 @@ if aba == '👥 Inscrição de Jogadores':
 
   st.divider()
 
-  # GERENCIAMENTO DE EXCLUSÃO E VISUALIZAÇÃO
   st.subheader('📋 Alunos e Torneios Cadastrados')
 
   with get_connection() as conn:
@@ -289,7 +288,7 @@ if aba == '👥 Inscrição de Jogadores':
 # -----------------------------------------------------------------------------
 # ABA 2: EMPARCEIRAMENTO E RESULTADOS (POR TORNEIO DA TURMA)
 # -----------------------------------------------------------------------------
-elif aba == '⚔️ Emparceiramento & Partidas':
+elif aba == '⚔️️ Emparceiramento & Partidas':
   with get_connection() as conn:
     df_torneios = pd.read_sql_query('SELECT * FROM torneios;', conn)
 
@@ -535,36 +534,105 @@ elif aba == '⚔️ Emparceiramento & Partidas':
           st.rerun()
 
 # -----------------------------------------------------------------------------
-# ABA 3: CLASSIFICAÇÃO COM FILTRO POR TURMA
+# ABA 3: CLASSIFICAÇÃO DETALHADA POR TURMA & PODIUM
 # -----------------------------------------------------------------------------
 elif aba == '📊 Classificação por Turma & Rodada':
-  st.header('🏆 Classificação por Turma')
+  st.header('🏆 Classificação do Torneio por Turma')
 
   with get_connection() as conn:
     df_turmas = pd.read_sql_query(
         'SELECT DISTINCT turma FROM jogadores;', conn
     )
+
+  if df_turmas.empty:
+    st.info('Nenhum aluno cadastrado no banco de dados.')
+  else:
     turmas_list = ['Todas as Turmas'] + df_turmas['turma'].tolist()
 
-    turma_filtro = st.selectbox('Filtrar por Turma:', turmas_list)
+    col_f1, col_f2 = st.columns([2, 2])
+    with col_f1:
+      turma_filtro = st.selectbox('🏫 Filtrar por Turma:', turmas_list)
+    with col_f2:
+      busca_nome = st.text_input('🔍 Buscar Aluno por Nome:')
 
-    query = 'SELECT nome AS [Nome], turma AS [Turma], escola AS [Escola], categoria AS [Categoria], pontos AS [Pontos], rating_atual AS [Rating Elo] FROM jogadores'
-    if turma_filtro != 'Todas as Turmas':
-      query += f" WHERE turma = '{turma_filtro}'"
-    query += ' ORDER BY pontos DESC, rating_atual DESC;'
+    with get_connection() as conn:
+      query = """
+                SELECT nome AS [Nome do Aluno], turma AS [Turma], escola AS [Escola], 
+                       categoria AS [Categoria], pontos AS [Pontos], 
+                       rating_inicial AS [Elo Inicial], rating_atual AS [Elo Atual],
+                       (rating_atual - rating_inicial) AS [Variação Elo]
+                FROM jogadores
+            """
+      condicoes = []
+      params = []
 
-    df_classificacao = pd.read_sql_query(query, conn)
-    df_classificacao.index = range(1, len(df_classificacao) + 1)
+      if turma_filtro != 'Todas as Turmas':
+        condicoes.append('turma = ?')
+        params.append(turma_filtro)
 
-  st.dataframe(df_classificacao, use_container_width=True)
+      if busca_nome.strip():
+        condicoes.append('nome LIKE ?')
+        params.append(f'%{busca_nome.strip()}%')
 
-  csv = df_classificacao.to_csv(index=True).encode('utf-8')
-  st.download_button(
-      label='📥 Baixar Tabela em CSV',
-      data=csv,
-      file_name=f'classificacao_{turma_filtro.lower().replace(" ", "_")}.csv',
-      mime='text/csv',
-  )
+      if condicoes:
+        query += ' WHERE ' + ' AND '.join(condicoes)
+
+      query += ' ORDER BY pontos DESC, rating_atual DESC;'
+
+      df_classificacao = pd.read_sql_query(query, conn, params=params)
+
+    if not df_classificacao.empty:
+      # PÓDIO TOP 3
+      st.subheader('🥇 Pódio da Turma')
+      col_p1, col_p2, col_p3 = st.columns(3)
+
+      if len(df_classificacao) >= 1:
+        j1 = df_classificacao.iloc[0]
+        col_p1.metric(
+            label='🥇 1º Lugar (Campeão)',
+            value=j1['Nome do Aluno'],
+            delta=f"{j1['Pontos']} pts | Elo {j1['Elo Atual']}",
+        )
+
+      if len(df_classificacao) >= 2:
+        j2 = df_classificacao.iloc[1]
+        col_p2.metric(
+            label='🥈 2º Lugar (Vice)',
+            value=j2['Nome do Aluno'],
+            delta=f"{j2['Pontos']} pts | Elo {j2['Elo Atual']}",
+        )
+
+      if len(df_classificacao) >= 3:
+        j3 = df_classificacao.iloc[2]
+        col_p3.metric(
+            label='🥉 3º Lugar',
+            value=j3['Nome do Aluno'],
+            delta=f"{j3['Pontos']} pts | Elo {j3['Elo Atual']}",
+        )
+
+      st.write('---')
+      st.subheader('📜 Tabela Geral de Classificação')
+
+      # Adicionar posição e ícones
+      df_exibir = df_classificacao.copy()
+      df_exibir.index = range(1, len(df_exibir) + 1)
+      df_exibir.index.name = 'Posição'
+
+      st.dataframe(df_exibir, use_container_width=True)
+
+      # Botões para Download
+      col_d1, col_d2 = st.columns(2)
+      with col_d1:
+        csv = df_exibir.to_csv(index=True).encode('utf-8')
+        st.download_button(
+            label='📥 Baixar Tabela em CSV',
+            data=csv,
+            file_name=(
+                f'classificacao_{turma_filtro.lower().replace(" ", "_")}.csv'
+            ),
+            mime='text/csv',
+            use_container_width=True,
+        )
 
 # -----------------------------------------------------------------------------
 # ABA 4: CRONÔMETRO REGRISSIVO COM APITO SONORO
