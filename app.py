@@ -7,7 +7,7 @@ import streamlit.components.v1 as components
 DB_NAME = 'torneio_xadrez.db'
 
 # -----------------------------------------------------------------------------
-# 1. BANCO DE DADOS (SQLITE + MIGRAÇÕES AUTOMÁTICAS)
+# 1. BANCO DE DADOS (SQLITE + ESTRUTURA COMPLETA DE ESTATÍSTICAS)
 # -----------------------------------------------------------------------------
 
 
@@ -41,7 +41,10 @@ def inicializar_banco():
                 categoria TEXT DEFAULT 'Livre',
                 rating_inicial INTEGER DEFAULT 1000,
                 rating_atual INTEGER DEFAULT 1000,
-                pontos REAL DEFAULT 0.0
+                pontos REAL DEFAULT 0.0,
+                vitorias INTEGER DEFAULT 0,
+                empates INTEGER DEFAULT 0,
+                derrotas INTEGER DEFAULT 0
             )
         """)
 
@@ -55,17 +58,25 @@ def inicializar_banco():
                 pretas_id INTEGER,
                 resultado TEXT,
                 variacao_elo_brancas INTEGER DEFAULT 0,
-                variacao_elo_pretas INTEGER DEFAULT 0
+                variacao_elo_pretas INTEGER DEFAULT 0,
+                torneio_id INTEGER
             )
         """)
 
-    # Migração automática: garante a coluna torneio_id
+    # MIGRAÇÃO AUTOMÁTICA DE COLUNAS
+    cursor.execute("PRAGMA table_info('jogadores');")
+    colunas_j = [col[1] for col in cursor.fetchall()]
+    if 'vitorias' not in colunas_j:
+      cursor.execute('ALTER TABLE jogadores ADD COLUMN vitorias INTEGER DEFAULT 0;')
+      cursor.execute('ALTER TABLE jogadores ADD COLUMN empates INTEGER DEFAULT 0;')
+      cursor.execute('ALTER TABLE jogadores ADD COLUMN derrotas INTEGER DEFAULT 0;')
+
     cursor.execute("PRAGMA table_info('partidas');")
-    colunas = [col[1] for col in cursor.fetchall()]
-    if 'torneio_id' not in colunas:
+    colunas_p = [col[1] for col in cursor.fetchall()]
+    if 'torneio_id' not in colunas_p:
       cursor.execute('ALTER TABLE partidas ADD COLUMN torneio_id INTEGER;')
 
-    # Auto-criação retroativa de torneios para turmas existentes
+    # Sincronização automática de torneios existentes
     cursor.execute('SELECT DISTINCT turma FROM jogadores;')
     turmas_existentes = cursor.fetchall()
     for (t_nome,) in turmas_existentes:
@@ -105,7 +116,7 @@ class SistemaElo:
 
 
 # -----------------------------------------------------------------------------
-# 3. INTERFACE STREAMLIT
+# 3. INTERFACE PRINCIPAL
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title='Gestão de Torneio Escolar de Xadrez', page_icon='♟️', layout='wide'
@@ -117,14 +128,14 @@ aba = st.sidebar.radio(
     'Navegação',
     [
         '👥 Inscrição de Jogadores',
-        '⚔️ Emparceiramento & Partidas',
+        '⚔️️ Emparceiramento & Partidas',
         '📊 Classificação por Turma & Rodada',
         '⏱️ Cronômetro da Sala',
     ],
 )
 
 # -----------------------------------------------------------------------------
-# ABA 1: INSCRIÇÃO E GERENCIAMENTO DE JOGADORES / TURMAS
+# ABA 1: INSCRIÇÃO DE JOGADORES
 # -----------------------------------------------------------------------------
 if aba == '👥 Inscrição de Jogadores':
   st.header('Cadastrar Alunos e Criar Torneios por Turma')
@@ -173,8 +184,8 @@ if aba == '👥 Inscrição de Jogadores':
           for nome in nomes:
             cursor.execute(
                 """
-                            INSERT INTO jogadores (nome, turma, escola, categoria, rating_inicial, rating_atual, pontos)
-                            VALUES (?, ?, ?, ?, ?, ?, 0.0)
+                            INSERT INTO jogadores (nome, turma, escola, categoria, rating_inicial, rating_atual, pontos, vitorias, empates, derrotas)
+                            VALUES (?, ?, ?, ?, ?, ?, 0.0, 0, 0, 0)
                         """,
                 (
                     nome,
@@ -219,8 +230,8 @@ if aba == '👥 Inscrição de Jogadores':
           )
           cursor.execute(
               """
-                        INSERT INTO jogadores (nome, turma, escola, categoria, rating_inicial, rating_atual, pontos)
-                        VALUES (?, ?, ?, ?, ?, ?, 0.0)
+                        INSERT INTO jogadores (nome, turma, escola, categoria, rating_inicial, rating_atual, pontos, vitorias, empates, derrotas)
+                        VALUES (?, ?, ?, ?, ?, ?, 0.0, 0, 0, 0)
                     """,
               (
                   nome,
@@ -286,9 +297,9 @@ if aba == '👥 Inscrição de Jogadores':
   st.dataframe(df_jogadores, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# ABA 2: EMPARCEIRAMENTO E RESULTADOS (POR TORNEIO DA TURMA)
+# ABA 2: EMPARCEIRAMENTO E LANÇAMENTO DE RESULTADOS (CORRIGIDO)
 # -----------------------------------------------------------------------------
-elif aba == '⚔️️ Emparceiramento & Partidas':
+elif aba == '⚔️ Emparceiramento & Partidas':
   with get_connection() as conn:
     df_torneios = pd.read_sql_query('SELECT * FROM torneios;', conn)
 
@@ -396,7 +407,8 @@ elif aba == '⚔️️ Emparceiramento & Partidas':
                   (torneio_id, rodada_ativa, mesa, j_bye['id']),
               )
               cursor.execute(
-                  'UPDATE jogadores SET pontos = pontos + 1.0 WHERE id = ?;',
+                  'UPDATE jogadores SET pontos = pontos + 1.0, vitorias ='
+                  ' vitorias + 1 WHERE id = ?;',
                   (j_bye['id'],),
               )
 
@@ -464,11 +476,7 @@ elif aba == '⚔️️ Emparceiramento & Partidas':
                   'p_rating': p_rating,
                   'opcao': st.selectbox(
                       'Vencedor',
-                      options=[
-                          f'Vitória de {b_nome}',
-                          'Empate',
-                          f'Vitória de {p_nome}',
-                      ],
+                      options=['Brancas Vencem', 'Empate', 'Pretas Vencem'],
                       key=f'mesa_db_{mesa}',
                   ),
               }
@@ -487,21 +495,30 @@ elif aba == '⚔️️ Emparceiramento & Partidas':
               opcao = dados['opcao']
               b_id, p_id_atl = dados['b_id'], dados['p_id']
 
-              if 'Vitória de' in opcao:
-                vencedor_is_brancas = dados['b_nome'] in opcao
-                res_str = '1-0' if vencedor_is_brancas else '0-1'
-                score_b = 1.0 if vencedor_is_brancas else 0.0
-                pts_b = 1.0 if vencedor_is_brancas else 0.0
-                pts_p = 0.0 if vencedor_is_brancas else 1.0
-              else:
+              if opcao == 'Brancas Vencem':
+                res_str = '1-0'
+                score_b = 1.0
+                v_b, e_b, d_b = 1, 0, 0
+                v_p, e_p, d_p = 0, 0, 1
+                pts_b, pts_p = 1.0, 0.0
+              elif opcao == 'Pretas Vencem':
+                res_str = '0-1'
+                score_b = 0.0
+                v_b, e_b, d_b = 0, 0, 1
+                v_p, e_p, d_p = 1, 0, 0
+                pts_b, pts_p = 0.0, 1.0
+              else:  # Empate
                 res_str = '0.5-0.5'
                 score_b = 0.5
+                v_b, e_b, d_b = 0, 1, 0
+                v_p, e_p, d_p = 0, 1, 0
                 pts_b, pts_p = 0.5, 0.5
 
               var_b, var_p = SistemaElo.calcular_variacao(
                   dados['b_rating'], dados['p_rating'], score_b
               )
 
+              # Atualizar Partida
               cursor.execute(
                   """
                                 UPDATE partidas 
@@ -511,22 +528,26 @@ elif aba == '⚔️️ Emparceiramento & Partidas':
                   (res_str, var_b, var_p, p_id_db),
               )
 
+              # Atualizar Jogador Brancas
               cursor.execute(
                   """
                                 UPDATE jogadores 
-                                SET pontos = pontos + ?, rating_atual = rating_atual + ?
+                                SET pontos = pontos + ?, rating_atual = rating_atual + ?,
+                                    vitorias = vitorias + ?, empates = empates + ?, derrotas = derrotas + ?
                                 WHERE id = ?;
                             """,
-                  (pts_b, var_b, b_id),
+                  (pts_b, var_b, v_b, e_b, d_b, b_id),
               )
 
+              # Atualizar Jogador Pretas
               cursor.execute(
                   """
                                 UPDATE jogadores 
-                                SET pontos = pontos + ?, rating_atual = rating_atual + ?
+                                SET pontos = pontos + ?, rating_atual = rating_atual + ?,
+                                    vitorias = vitorias + ?, empates = empates + ?, derrotas = derrotas + ?
                                 WHERE id = ?;
                             """,
-                  (pts_p, var_p, p_id_atl),
+                  (pts_p, var_p, v_p, e_p, d_p, p_id_atl),
               )
 
             conn.commit()
@@ -534,7 +555,7 @@ elif aba == '⚔️️ Emparceiramento & Partidas':
           st.rerun()
 
 # -----------------------------------------------------------------------------
-# ABA 3: CLASSIFICAÇÃO DETALHADA POR TURMA & PODIUM
+# ABA 3: CLASSIFICAÇÃO COM VITORIAS / EMPATES / DERROTAS
 # -----------------------------------------------------------------------------
 elif aba == '📊 Classificação por Turma & Rodada':
   st.header('🏆 Classificação do Torneio por Turma')
@@ -557,8 +578,9 @@ elif aba == '📊 Classificação por Turma & Rodada':
 
     with get_connection() as conn:
       query = """
-                SELECT nome AS [Nome do Aluno], turma AS [Turma], escola AS [Escola], 
-                       categoria AS [Categoria], pontos AS [Pontos], 
+                SELECT nome AS [Nome do Aluno], turma AS [Turma], 
+                       pontos AS [Pontos], vitorias AS [Vitórias (V)], 
+                       empates AS [Empates (E)], derrotas AS [Derrotas (D)],
                        rating_inicial AS [Elo Inicial], rating_atual AS [Elo Atual],
                        (rating_atual - rating_inicial) AS [Variação Elo]
                 FROM jogadores
@@ -577,7 +599,7 @@ elif aba == '📊 Classificação por Turma & Rodada':
       if condicoes:
         query += ' WHERE ' + ' AND '.join(condicoes)
 
-      query += ' ORDER BY pontos DESC, rating_atual DESC;'
+      query += ' ORDER BY pontos DESC, vitorias DESC, rating_atual DESC;'
 
       df_classificacao = pd.read_sql_query(query, conn, params=params)
 
@@ -589,17 +611,21 @@ elif aba == '📊 Classificação por Turma & Rodada':
       if len(df_classificacao) >= 1:
         j1 = df_classificacao.iloc[0]
         col_p1.metric(
-            label='🥇 1º Lugar (Campeão)',
+            label='🥇 1º Lugar',
             value=j1['Nome do Aluno'],
-            delta=f"{j1['Pontos']} pts | Elo {j1['Elo Atual']}",
+            delta=(
+                f"{j1['Pontos']} pts | {j1['Vitórias (V)']}V-{j1['Empates (E)']}E-{j1['Derrotas (D)']}D"
+            ),
         )
 
       if len(df_classificacao) >= 2:
         j2 = df_classificacao.iloc[1]
         col_p2.metric(
-            label='🥈 2º Lugar (Vice)',
+            label='🥈 2º Lugar',
             value=j2['Nome do Aluno'],
-            delta=f"{j2['Pontos']} pts | Elo {j2['Elo Atual']}",
+            delta=(
+                f"{j2['Pontos']} pts | {j2['Vitórias (V)']}V-{j2['Empates (E)']}E-{j2['Derrotas (D)']}D"
+            ),
         )
 
       if len(df_classificacao) >= 3:
@@ -607,35 +633,33 @@ elif aba == '📊 Classificação por Turma & Rodada':
         col_p3.metric(
             label='🥉 3º Lugar',
             value=j3['Nome do Aluno'],
-            delta=f"{j3['Pontos']} pts | Elo {j3['Elo Atual']}",
+            delta=(
+                f"{j3['Pontos']} pts | {j3['Vitórias (V)']}V-{j3['Empates (E)']}E-{j3['Derrotas (D)']}D"
+            ),
         )
 
       st.write('---')
       st.subheader('📜 Tabela Geral de Classificação')
 
-      # Adicionar posição e ícones
       df_exibir = df_classificacao.copy()
       df_exibir.index = range(1, len(df_exibir) + 1)
       df_exibir.index.name = 'Posição'
 
       st.dataframe(df_exibir, use_container_width=True)
 
-      # Botões para Download
-      col_d1, col_d2 = st.columns(2)
-      with col_d1:
-        csv = df_exibir.to_csv(index=True).encode('utf-8')
-        st.download_button(
-            label='📥 Baixar Tabela em CSV',
-            data=csv,
-            file_name=(
-                f'classificacao_{turma_filtro.lower().replace(" ", "_")}.csv'
-            ),
-            mime='text/csv',
-            use_container_width=True,
-        )
+      csv = df_exibir.to_csv(index=True).encode('utf-8')
+      st.download_button(
+          label='📥 Baixar Tabela em CSV',
+          data=csv,
+          file_name=(
+              f'classificacao_{turma_filtro.lower().replace(" ", "_")}.csv'
+          ),
+          mime='text/csv',
+          use_container_width=True,
+      )
 
 # -----------------------------------------------------------------------------
-# ABA 4: CRONÔMETRO REGRISSIVO COM APITO SONORO
+# ABA 4: CRONÔMETRO
 # -----------------------------------------------------------------------------
 elif aba == '⏱️ Cronômetro da Sala':
   st.subheader('⏱️ Temporizador da Rodada (Projeção)')
