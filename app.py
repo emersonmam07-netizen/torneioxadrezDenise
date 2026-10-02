@@ -7,7 +7,7 @@ import streamlit.components.v1 as components
 DB_NAME = 'torneio_xadrez.db'
 
 # -----------------------------------------------------------------------------
-# 1. BANCO DE DADOS (SQLITE + ESTRUTURA COMPLETA)
+# 1. BANCO DE DADOS (SQLITE)
 # -----------------------------------------------------------------------------
 
 
@@ -108,7 +108,7 @@ class SistemaElo:
       cls, rating_a: int, rating_b: int, resultado: float, k_factor: int = 32
   ) -> tuple[int, int]:
     exp_a = cls.calcular_expectativa(rating_a, rating_b)
-    exp_b = cls.calcular_expectativa(rating_a, rating_b)
+    exp_b = cls.calcular_expectativa(rating_b, rating_a)
 
     var_a = round(k_factor * (resultado - exp_a))
     var_b = round(k_factor * ((1.0 - resultado) - exp_b))
@@ -297,7 +297,7 @@ if aba == '👥 Inscrição de Jogadores':
   st.dataframe(df_jogadores, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# ABA 2: EMPARCEIRAMENTO E LANÇAMENTO DE RESULTADOS (BLOCO CORRIGIDO)
+# ABA 2: EMPARCEIRAMENTO E RODADAS ISOLADAS POR TURMA
 # -----------------------------------------------------------------------------
 elif aba == '⚔️ Emparceiramento & Partidas':
   with get_connection() as conn:
@@ -322,12 +322,14 @@ elif aba == '⚔️ Emparceiramento & Partidas':
     with get_connection() as conn:
       cursor = conn.cursor()
 
+      # Maior rodada criada para ESTA TURMA especificamente
       cursor.execute(
           'SELECT MAX(rodada) FROM partidas WHERE torneio_id = ?;', (torneio_id,)
       )
       res_max = cursor.fetchone()[0]
       max_rodada = res_max if res_max is not None else 0
 
+      # Verificar se existem partidas sem resultado para ESTA TURMA na rodada atual
       cursor.execute(
           'SELECT COUNT(*) FROM partidas WHERE torneio_id = ? AND rodada = ?'
           ' AND resultado IS NULL;',
@@ -336,9 +338,22 @@ elif aba == '⚔️ Emparceiramento & Partidas':
       partidas_pendentes = (cursor.fetchone()[0] > 0) if max_rodada > 0 else False
 
     rodada_ativa = max_rodada if partidas_pendentes else max_rodada + 1
-    st.header(f'⚔️ {torneio_selecionado} — Rodada {rodada_ativa}')
 
-    if not partidas_pendentes:
+    # Menu para visualizar historico de rodadas anteriores da mesma turma
+    if max_rodada > 0:
+      rodadas_disponiveis = list(range(1, max_rodada + 1))
+      rodada_visualizar = st.selectbox(
+          '📍 Selecione a Rodada para Visualizar / Lançar:',
+          options=rodadas_disponiveis,
+          index=len(rodadas_disponiveis) - 1,
+      )
+    else:
+      rodada_visualizar = 1
+
+    st.header(f'⚔️ {torneio_selecionado} — Rodada {rodada_visualizar}')
+
+    # Botão para gerar NOVO emparceiramento (somente se a última rodada estiver 100% concluída)
+    if not partidas_pendentes and rodada_visualizar == max_rodada:
       if st.button(
           f'🚀 Gerar Rodada {rodada_ativa} para {torneio_selecionado}',
           type='primary',
@@ -358,6 +373,7 @@ elif aba == '⚔️ Emparceiramento & Partidas':
                 ' cadastrados.'
             )
           else:
+            # Consulta partidas anteriores EXCLUSIVAMENTE deste torneio
             df_hist = pd.read_sql_query(
                 'SELECT brancas_id, pretas_id FROM partidas WHERE torneio_id'
                 ' = ? AND pretas_id IS NOT NULL AND brancas_id IS NOT NULL;',
@@ -366,8 +382,12 @@ elif aba == '⚔️ Emparceiramento & Partidas':
             )
             historico_pares = set()
             for _, row_h in df_hist.iterrows():
-              historico_pares.add((int(row_h['brancas_id']), int(row_h['pretas_id'])))
-              historico_pares.add((int(row_h['pretas_id']), int(row_h['brancas_id'])))
+              historico_pares.add(
+                  (int(row_h['brancas_id']), int(row_h['pretas_id']))
+              )
+              historico_pares.add(
+                  (int(row_h['pretas_id']), int(row_h['brancas_id']))
+              )
 
             livres = df_j.to_dict('records')
             confrontos = []
@@ -399,6 +419,7 @@ elif aba == '⚔️ Emparceiramento & Partidas':
               )
               mesa += 1
 
+            # Atribuição de BYE (Folga)
             if livres:
               j_bye = livres[0]
               cursor.execute(
@@ -417,6 +438,7 @@ elif aba == '⚔️ Emparceiramento & Partidas':
             conn.commit()
             st.rerun()
 
+    # Lançamento e exibição de partidas da rodada selecionada
     with get_connection() as conn:
       cursor = conn.cursor()
       cursor.execute(
@@ -430,13 +452,14 @@ elif aba == '⚔️ Emparceiramento & Partidas':
                 WHERE p.torneio_id = ? AND p.rodada = ?
                 ORDER BY p.mesa ASC;
             """,
-          (torneio_id, rodada_ativa),
+          (torneio_id, rodada_visualizar),
       )
       partidas_rodada = cursor.fetchall()
 
     if partidas_rodada:
       st.subheader(
-          f'📋 Lançamento de Resultados — Rodada {rodada_ativa} ({torneio_selecionado})'
+          f'📋 Lançamento de Resultados — Rodada {rodada_visualizar}'
+          f' ({torneio_selecionado})'
       )
       with st.form('form_resultados'):
         res_inputs = {}
@@ -469,23 +492,26 @@ elif aba == '⚔️ Emparceiramento & Partidas':
 
           with col_r:
             if p_id_atleta is not None:
-              res_inputs[p_id] = {
-                  'b_id': b_id,
-                  'p_id': p_id_atleta,
-                  'b_nome': b_nome,
-                  'p_nome': p_nome,
-                  'b_rating': b_rating,
-                  'p_rating': p_rating,
-                  'opcao': st.selectbox(
-                      'Vencedor',
-                      options=['Brancas Vencem', 'Empate', 'Pretas Vencem'],
-                      key=f'mesa_db_{mesa}',
-                  ),
-              }
+              if res_atual is not None:
+                st.info(f'Resultado Lançado: **{res_atual}**')
+              else:
+                res_inputs[p_id] = {
+                    'b_id': b_id,
+                    'p_id': p_id_atleta,
+                    'b_nome': b_nome,
+                    'p_nome': p_nome,
+                    'b_rating': b_rating,
+                    'p_rating': p_rating,
+                    'opcao': st.selectbox(
+                        'Vencedor',
+                        options=['Brancas Vencem', 'Empate', 'Pretas Vencem'],
+                        key=f'mesa_db_{mesa}',
+                    ),
+                }
 
           st.write('---')
 
-        if st.form_submit_button(
+        if res_inputs and st.form_submit_button(
             'Confirmar Resultados no Banco',
             type='primary',
             use_container_width=True,
@@ -557,7 +583,7 @@ elif aba == '⚔️ Emparceiramento & Partidas':
           st.rerun()
 
 # -----------------------------------------------------------------------------
-# ABA 3: CLASSIFICAÇÃO
+# ABA 3: CLASSIFICAÇÃO POR TURMA
 # -----------------------------------------------------------------------------
 elif aba == '📊 Classificação por Turma & Rodada':
   st.header('🏆 Classificação do Torneio por Turma')
