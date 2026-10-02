@@ -26,7 +26,7 @@ def inicializar_banco():
             CREATE TABLE IF NOT EXISTS torneios (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 nome TEXT NOT NULL UNIQUE,
-                turma TEXT NOT NULL,
+                turma TEXT NOT NULL UNIQUE,
                 status TEXT DEFAULT 'EM_ANDAMENTO'
             )
         """)
@@ -53,15 +53,27 @@ def inicializar_banco():
                 rodada INTEGER NOT NULL,
                 mesa INTEGER NOT NULL,
                 brancas_id INTEGER NOT NULL,
-                pretas_id INTEGER, -- NULL representa Folga / BYE
-                resultado TEXT, -- '1-0', '0-1', '0.5-0.5', 'BYE'
+                pretas_id INTEGER,
+                resultado TEXT,
                 variacao_elo_brancas INTEGER DEFAULT 0,
                 variacao_elo_pretas INTEGER DEFAULT 0,
-                FOREIGN KEY (torneio_id) REFERENCES torneios (id),
-                FOREIGN KEY (brancas_id) REFERENCES jogadores (id),
-                FOREIGN KEY (pretas_id) REFERENCES jogadores (id)
+                FOREIGN KEY (torneio_id) REFERENCES torneios (id) ON DELETE CASCADE,
+                FOREIGN KEY (brancas_id) REFERENCES jogadores (id) ON DELETE CASCADE,
+                FOREIGN KEY (pretas_id) REFERENCES jogadores (id) ON DELETE CASCADE
             )
         """)
+
+    # AUTO-CRIAÇÃO DE TORNEIOS PARA TURMAS EXISTENTES (Sincronização Retroativa)
+    cursor.execute('SELECT DISTINCT turma FROM jogadores;')
+    turmas_existentes = cursor.fetchall()
+    for (t_nome,) in turmas_existentes:
+      if t_nome and t_nome.strip():
+        nome_torneio = f'Torneio {t_nome.strip()}'
+        cursor.execute(
+            'INSERT OR IGNORE INTO torneios (nome, turma) VALUES (?, ?);',
+            (nome_torneio, t_nome.strip()),
+        )
+
     conn.commit()
 
 
@@ -110,10 +122,10 @@ aba = st.sidebar.radio(
 )
 
 # -----------------------------------------------------------------------------
-# ABA 1: INSCRIÇÃO DE JOGADORES E CRIAÇÃO DO TORNEIO DA TURMA
+# ABA 1: INSCRIÇÃO E GERENCIAMENTO DE JOGADORES / TORNEIOS
 # -----------------------------------------------------------------------------
 if aba == '👥 Inscrição de Jogadores':
-  st.header('Cadastrar Alunos e Criar Torneio da Turma')
+  st.header('Cadastrar Alunos e Criar Torneios por Turma')
 
   tipo_cadastro = st.radio(
       'Modo de Cadastro:',
@@ -144,17 +156,17 @@ if aba == '👥 Inscrição de Jogadores':
         type='primary',
         use_container_width=True,
     ):
-      if turma_lote and lista_nomes.strip():
+      if turma_lote.strip() and lista_nomes.strip():
         nomes = [n.strip() for n in lista_nomes.split('\n') if n.strip()]
-        nome_torneio = f'Torneio {turma_lote.strip()}'
+        turma_limpa = turma_lote.strip()
+        nome_torneio = f'Torneio {turma_limpa}'
 
         with get_connection() as conn:
           cursor = conn.cursor()
-
-          # Criar ou obter o torneio da turma
+          # Criar torneio para a turma
           cursor.execute(
               'INSERT OR IGNORE INTO torneios (nome, turma) VALUES (?, ?);',
-              (nome_torneio, turma_lote.strip()),
+              (nome_torneio, turma_limpa),
           )
 
           # Cadastrar os alunos
@@ -166,7 +178,7 @@ if aba == '👥 Inscrição de Jogadores':
                         """,
                 (
                     nome,
-                    turma_lote.strip(),
+                    turma_limpa,
                     escola_lote,
                     categoria_lote,
                     rating_inicial_lote,
@@ -176,7 +188,7 @@ if aba == '👥 Inscrição de Jogadores':
           conn.commit()
 
         st.success(
-            f'🎉 {len(nomes)} alunos cadastrados com sucesso! **"{nome_torneio}"**'
+            f'🎉 {len(nomes)} alunos cadastrados! Torneio **"{nome_torneio}"**'
             ' criado.'
         )
         st.rerun()
@@ -196,13 +208,14 @@ if aba == '👥 Inscrição de Jogadores':
       rating_inicial = st.number_input('Rating Inicial', value=1000, step=25)
 
     if st.button('Cadastrar Aluno', type='primary', use_container_width=True):
-      if nome and turma:
-        nome_torneio = f'Torneio {turma.strip()}'
+      if nome and turma.strip():
+        turma_limpa = turma.strip()
+        nome_torneio = f'Torneio {turma_limpa}'
         with get_connection() as conn:
           cursor = conn.cursor()
           cursor.execute(
               'INSERT OR IGNORE INTO torneios (nome, turma) VALUES (?, ?);',
-              (nome_torneio, turma.strip()),
+              (nome_torneio, turma_limpa),
           )
           cursor.execute(
               """
@@ -211,7 +224,7 @@ if aba == '👥 Inscrição de Jogadores':
                     """,
               (
                   nome,
-                  turma.strip(),
+                  turma_limpa,
                   escola,
                   categoria,
                   rating_inicial,
@@ -226,22 +239,51 @@ if aba == '👥 Inscrição de Jogadores':
 
   st.divider()
 
-  # Exibição dos torneios ativos e alunos salvos
-  col_t1, col_t2 = st.columns([4, 1])
-  with col_t1:
-    st.subheader('Alunos e Torneios Cadastrados')
-  with col_t2:
-    if st.button('🗑️ Resetar Tudo'):
-      with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM partidas;')
-        cursor.execute('DELETE FROM jogadores;')
-        cursor.execute('DELETE FROM torneios;')
-        conn.commit()
-      st.rerun()
+  # GERENCIAMENTO DE EXCLUSÃO E VISUALIZAÇÃO
+  st.subheader('📋 Alunos e Torneios Cadastrados')
 
   with get_connection() as conn:
     df_jogadores = pd.read_sql_query('SELECT * FROM jogadores;', conn)
+    df_torneios_view = pd.read_sql_query('SELECT * FROM torneios;', conn)
+
+  col_v1, col_v2 = st.columns([3, 2])
+  with col_v1:
+    st.write('### 🏆 Torneios Ativos por Turma')
+    st.dataframe(df_torneios_view, use_container_width=True)
+
+  with col_v2:
+    st.write('### ⚙️ Opções de Exclusão')
+    if not df_jogadores.empty:
+      turmas_existentes = df_jogadores['turma'].unique().tolist()
+      turma_del = st.selectbox('Selecione uma turma:', turmas_existentes)
+
+      if st.button('🗑️ Excluir Turma e seus Alunos', type='secondary'):
+        with get_connection() as conn:
+          cursor = conn.cursor()
+          cursor.execute(
+              'DELETE FROM partidas WHERE brancas_id IN (SELECT id FROM'
+              ' jogadores WHERE turma = ?) OR pretas_id IN (SELECT id FROM'
+              ' jogadores WHERE turma = ?);',
+              (turma_del, turma_del),
+          )
+          cursor.execute(
+              'DELETE FROM jogadores WHERE turma = ?;', (turma_del,)
+          )
+          cursor.execute('DELETE FROM torneios WHERE turma = ?;', (turma_del,))
+          conn.commit()
+        st.success(f'Turma "{turma_del}" removida!')
+        st.rerun()
+
+      if st.button('💥 RESETAR TODO O BANCO DE DADOS', type='primary'):
+        with get_connection() as conn:
+          cursor = conn.cursor()
+          cursor.execute('DELETE FROM partidas;')
+          cursor.execute('DELETE FROM jogadores;')
+          cursor.execute('DELETE FROM torneios;')
+          conn.commit()
+        st.rerun()
+
+  st.write('### 👤 Lista Geral de Alunos')
   st.dataframe(df_jogadores, use_container_width=True)
 
 # -----------------------------------------------------------------------------
@@ -253,8 +295,8 @@ elif aba == '⚔️ Emparceiramento & Partidas':
 
   if df_torneios.empty:
     st.warning(
-        'Nenhum torneio/turma cadastrado ainda. Faça a inscrição dos alunos'
-        ' na primeira aba.'
+        'Nenhum torneio/turma encontrado. Cadastre os alunos da turma na'
+        ' primeira aba para criar o torneio automaticamente.'
     )
   else:
     torneio_selecionado = st.selectbox(
@@ -270,13 +312,11 @@ elif aba == '⚔️ Emparceiramento & Partidas':
     with get_connection() as conn:
       cursor = conn.cursor()
 
-      # Rodada atual para este torneio específico
       cursor.execute(
           'SELECT MAX(rodada) FROM partidas WHERE torneio_id = ?;', (torneio_id,)
       )
       max_rodada = cursor.fetchone()[0] or 0
 
-      # Verificar partidas pendentes neste torneio
       cursor.execute(
           'SELECT COUNT(*) FROM partidas WHERE torneio_id = ? AND rodada = ?'
           ' AND resultado IS NULL;',
@@ -287,10 +327,9 @@ elif aba == '⚔️ Emparceiramento & Partidas':
     rodada_ativa = max_rodada if partidas_pendentes else max_rodada + 1
     st.header(f'⚔️ {torneio_selecionado} — Rodada {rodada_ativa}')
 
-    # Botão para gerar a rodada
     if not partidas_pendentes:
       if st.button(
-          f'🚀 Gerar Rodada {rodada_ativa} para o {torneio_selecionado}',
+          f'🚀 Gerar Rodada {rodada_ativa} para {torneio_selecionado}',
           type='primary',
           use_container_width=True,
       ):
@@ -348,7 +387,6 @@ elif aba == '⚔️ Emparceiramento & Partidas':
               )
               mesa += 1
 
-            # BYE (Folga)
             if livres:
               j_bye = livres[0]
               cursor.execute(
@@ -366,7 +404,6 @@ elif aba == '⚔️ Emparceiramento & Partidas':
             conn.commit()
             st.rerun()
 
-    # Form de lançamento de resultados
     with get_connection() as conn:
       cursor = conn.cursor()
       cursor.execute(
