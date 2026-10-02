@@ -63,7 +63,7 @@ def inicializar_banco():
             )
         """)
 
-    # MIGRAÇÃO AUTOMÁTICA DE COLUNAS
+    # MIGRAÇÕES AUTOMÁTICAS
     cursor.execute("PRAGMA table_info('jogadores');")
     colunas_j = [col[1] for col in cursor.fetchall()]
     if 'vitorias' not in colunas_j:
@@ -76,7 +76,7 @@ def inicializar_banco():
     if 'torneio_id' not in colunas_p:
       cursor.execute('ALTER TABLE partidas ADD COLUMN torneio_id INTEGER;')
 
-    # Sincronização automática de torneios existentes
+    # Sincronização automática de torneios para turmas que já têm alunos
     cursor.execute('SELECT DISTINCT turma FROM jogadores;')
     turmas_existentes = cursor.fetchall()
     for (t_nome,) in turmas_existentes:
@@ -150,7 +150,7 @@ if aba == '👥 Inscrição de Jogadores':
   if tipo_cadastro == '📋 Cadastro em Lote (Colar Lista)':
     col1, col2 = st.columns(2)
     with col1:
-      turma_lote = st.text_input('Turma (Ex: 6º Ano A)')
+      turma_lote = st.text_input('Turma (Ex: 4º ano 01)')
       escola_lote = st.text_input('Escola', value='Escola Municipal')
     with col2:
       categoria_lote = st.selectbox(
@@ -210,7 +210,7 @@ if aba == '👥 Inscrição de Jogadores':
     col1, col2 = st.columns(2)
     with col1:
       nome = st.text_input('Nome do Aluno')
-      turma = st.text_input('Turma (Ex: 6º Ano A)')
+      turma = st.text_input('Turma (Ex: 4º ano 01)')
       escola = st.text_input('Escola', value='Escola Municipal')
     with col2:
       categoria = st.selectbox(
@@ -297,7 +297,7 @@ if aba == '👥 Inscrição de Jogadores':
   st.dataframe(df_jogadores, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# ABA 2: EMPARCEIRAMENTO E RODADAS ISOLADAS POR TURMA
+# ABA 2: EMPARCEIRAMENTO E LANÇAMENTO DE RESULTADOS (GARANTIA DO BOTÃO)
 # -----------------------------------------------------------------------------
 elif aba == '⚔️ Emparceiramento & Partidas':
   with get_connection() as conn:
@@ -322,14 +322,20 @@ elif aba == '⚔️ Emparceiramento & Partidas':
     with get_connection() as conn:
       cursor = conn.cursor()
 
-      # Maior rodada criada para ESTA TURMA especificamente
+      # Total de alunos cadastrados nesta turma
+      cursor.execute(
+          'SELECT COUNT(*) FROM jogadores WHERE turma = ?;', (turma_nome,)
+      )
+      total_alunos_turma = cursor.fetchone()[0]
+
+      # Maior rodada cadastrada
       cursor.execute(
           'SELECT MAX(rodada) FROM partidas WHERE torneio_id = ?;', (torneio_id,)
       )
       res_max = cursor.fetchone()[0]
       max_rodada = res_max if res_max is not None else 0
 
-      # Verificar se existem partidas sem resultado para ESTA TURMA na rodada atual
+      # Partidas sem resultado na última rodada
       cursor.execute(
           'SELECT COUNT(*) FROM partidas WHERE torneio_id = ? AND rodada = ?'
           ' AND resultado IS NULL;',
@@ -339,23 +345,24 @@ elif aba == '⚔️ Emparceiramento & Partidas':
 
     rodada_ativa = max_rodada if partidas_pendentes else max_rodada + 1
 
-    # Menu para visualizar historico de rodadas anteriores da mesma turma
-    if max_rodada > 0:
-      rodadas_disponiveis = list(range(1, max_rodada + 1))
-      rodada_visualizar = st.selectbox(
-          '📍 Selecione a Rodada para Visualizar / Lançar:',
-          options=rodadas_disponiveis,
-          index=len(rodadas_disponiveis) - 1,
+    st.header(f'⚔️ {torneio_selecionado} — Rodada {rodada_ativa}')
+
+    # VERIFICAÇÕES DE SEGURANÇA E EXIBIÇÃO DO BOTÃO
+    if total_alunos_turma < 2:
+      st.error(
+          f'⚠️ A turma "{turma_nome}" possui apenas {total_alunos_turma}'
+          ' aluno(s) cadastrado(s). Cadastre pelo menos 2 alunos na aba'
+          ' "👥 Inscrição de Jogadores" para iniciar o torneio.'
+      )
+    elif partidas_pendentes:
+      st.warning(
+          f'⚠️ A Rodada {max_rodada} possui partidas sem resultado. Preencha e'
+          ' confirme os resultados abaixo para liberar a próxima rodada.'
       )
     else:
-      rodada_visualizar = 1
-
-    st.header(f'⚔️ {torneio_selecionado} — Rodada {rodada_visualizar}')
-
-    # Botão para gerar NOVO emparceiramento (somente se a última rodada estiver 100% concluída)
-    if not partidas_pendentes and rodada_visualizar == max_rodada:
+      # Exibe o botão de gerar rodada
       if st.button(
-          f'🚀 Gerar Rodada {rodada_ativa} para {torneio_selecionado}',
+          f'🚀 Gerar Emparceiramento — Rodada {rodada_ativa}',
           type='primary',
           use_container_width=True,
       ):
@@ -367,78 +374,72 @@ elif aba == '⚔️ Emparceiramento & Partidas':
               params=(turma_nome,),
           )
 
-          if len(df_j) < 2:
-            st.warning(
-                f'A turma {turma_nome} precisa de pelo menos 2 alunos'
-                ' cadastrados.'
+          df_hist = pd.read_sql_query(
+              'SELECT brancas_id, pretas_id FROM partidas WHERE torneio_id = ?'
+              ' AND pretas_id IS NOT NULL AND brancas_id IS NOT NULL;',
+              conn,
+              params=(torneio_id,),
+          )
+          historico_pares = set()
+          for _, row_h in df_hist.iterrows():
+            historico_pares.add(
+                (int(row_h['brancas_id']), int(row_h['pretas_id']))
             )
-          else:
-            # Consulta partidas anteriores EXCLUSIVAMENTE deste torneio
-            df_hist = pd.read_sql_query(
-                'SELECT brancas_id, pretas_id FROM partidas WHERE torneio_id'
-                ' = ? AND pretas_id IS NOT NULL AND brancas_id IS NOT NULL;',
-                conn,
-                params=(torneio_id,),
+            historico_pares.add(
+                (int(row_h['pretas_id']), int(row_h['brancas_id']))
             )
-            historico_pares = set()
-            for _, row_h in df_hist.iterrows():
-              historico_pares.add(
-                  (int(row_h['brancas_id']), int(row_h['pretas_id']))
-              )
-              historico_pares.add(
-                  (int(row_h['pretas_id']), int(row_h['brancas_id']))
-              )
 
-            livres = df_j.to_dict('records')
-            confrontos = []
+          livres = df_j.to_dict('records')
+          confrontos = []
 
-            while len(livres) > 1:
-              j1 = livres.pop(0)
-              j2 = None
+          while len(livres) > 1:
+            j1 = livres.pop(0)
+            j2 = None
 
-              for cand in livres:
-                if (j1['id'], cand['id']) not in historico_pares:
-                  j2 = cand
-                  break
+            for cand in livres:
+              if (j1['id'], cand['id']) not in historico_pares:
+                j2 = cand
+                break
 
-              if not j2:
-                j2 = livres[0]
+            if not j2:
+              j2 = livres[0]
 
-              livres.remove(j2)
-              confrontos.append((j1, j2))
+            livres.remove(j2)
+            confrontos.append((j1, j2))
 
-            cursor = conn.cursor()
-            mesa = 1
-            for j1, j2 in confrontos:
-              cursor.execute(
-                  """
-                                INSERT INTO partidas (torneio_id, rodada, mesa, brancas_id, pretas_id)
-                                VALUES (?, ?, ?, ?, ?)
-                            """,
-                  (torneio_id, rodada_ativa, mesa, j1['id'], j2['id']),
-              )
-              mesa += 1
+          cursor = conn.cursor()
+          mesa = 1
+          for j1, j2 in confrontos:
+            cursor.execute(
+                """
+                            INSERT INTO partidas (torneio_id, rodada, mesa, brancas_id, pretas_id)
+                            VALUES (?, ?, ?, ?, ?)
+                        """,
+                (torneio_id, rodada_ativa, mesa, j1['id'], j2['id']),
+            )
+            mesa += 1
 
-            # Atribuição de BYE (Folga)
-            if livres:
-              j_bye = livres[0]
-              cursor.execute(
-                  """
-                                INSERT INTO partidas (torneio_id, rodada, mesa, brancas_id, pretas_id, resultado)
-                                VALUES (?, ?, ?, ?, NULL, 'BYE')
-                            """,
-                  (torneio_id, rodada_ativa, mesa, j_bye['id']),
-              )
-              cursor.execute(
-                  'UPDATE jogadores SET pontos = pontos + 1.0, vitorias ='
-                  ' vitorias + 1 WHERE id = ?;',
-                  (j_bye['id'],),
-              )
+          if livres:
+            j_bye = livres[0]
+            cursor.execute(
+                """
+                            INSERT INTO partidas (torneio_id, rodada, mesa, brancas_id, pretas_id, resultado)
+                            VALUES (?, ?, ?, ?, NULL, 'BYE')
+                        """,
+                (torneio_id, rodada_ativa, mesa, j_bye['id']),
+            )
+            cursor.execute(
+                'UPDATE jogadores SET pontos = pontos + 1.0, vitorias ='
+                ' vitorias + 1 WHERE id = ?;',
+                (j_bye['id'],),
+            )
 
-            conn.commit()
-            st.rerun()
+          conn.commit()
+          st.success(f'Rodada {rodada_ativa} gerada!')
+          st.rerun()
 
-    # Lançamento e exibição de partidas da rodada selecionada
+    # BUSCAR E EXIBIR PARTIDAS DA RODADA VISUALIZADA
+    rodada_exibir = max_rodada if max_rodada > 0 else 1
     with get_connection() as conn:
       cursor = conn.cursor()
       cursor.execute(
@@ -452,13 +453,13 @@ elif aba == '⚔️ Emparceiramento & Partidas':
                 WHERE p.torneio_id = ? AND p.rodada = ?
                 ORDER BY p.mesa ASC;
             """,
-          (torneio_id, rodada_visualizar),
+          (torneio_id, rodada_exibir),
       )
       partidas_rodada = cursor.fetchall()
 
     if partidas_rodada:
       st.subheader(
-          f'📋 Lançamento de Resultados — Rodada {rodada_visualizar}'
+          f'📋 Lançamento de Resultados — Rodada {rodada_exibir}'
           f' ({torneio_selecionado})'
       )
       with st.form('form_resultados'):
