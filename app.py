@@ -37,7 +37,7 @@ def inicializar_banco():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 nome TEXT NOT NULL,
                 turma TEXT NOT NULL,
-                escola TEXT DEFAULT 'Escola Municipal',
+                escola TEXT DEFAULT 'EBM Denise Christiane Harms',
                 categoria TEXT DEFAULT 'Livre',
                 rating_inicial INTEGER DEFAULT 1000,
                 rating_atual INTEGER DEFAULT 1000,
@@ -76,7 +76,7 @@ def inicializar_banco():
     if 'torneio_id' not in colunas_p:
       cursor.execute('ALTER TABLE partidas ADD COLUMN torneio_id INTEGER;')
 
-    # Sincronização automática de torneios para turmas que já têm alunos
+    # Sincronização automática de torneios
     cursor.execute('SELECT DISTINCT turma FROM jogadores;')
     turmas_existentes = cursor.fetchall()
     for (t_nome,) in turmas_existentes:
@@ -116,20 +116,33 @@ class SistemaElo:
 
 
 # -----------------------------------------------------------------------------
-# 3. INTERFACE PRINCIPAL
+# 3. INTERFACE PRINCIPAL COM LOGÓTIPO
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title='Gestão de Torneio Escolar de Xadrez', page_icon='♟️', layout='wide'
+    page_title='Clube de Xadrez Denise Harms', page_icon='♟️', layout='wide'
 )
 
-st.title('♟️ Sistema de Torneio Escolar de Xadrez')
+# Inserção do logótipo no canto superior esquerdo
+col_logo, col_titulo = st.columns([1, 6])
+
+with col_logo:
+  try:
+    st.image('logo.png', width=110)
+  except Exception:
+    st.write('♟️')
+
+with col_titulo:
+  st.title('Clube de Xadrez Denise Harms')
+  st.caption(
+      'Sistema de Torneios Escolares, Emparceiramento Suíço & Rating Elo'
+  )
 
 aba = st.sidebar.radio(
     'Navegação',
     [
         '👥 Inscrição de Jogadores',
         '⚔️ Emparceiramento & Partidas',
-        '📊 Classificação por Turma & Rodada',
+        '📊 Classificação & Ranking',
         '⏱️ Cronômetro da Sala',
     ],
 )
@@ -151,7 +164,9 @@ if aba == '👥 Inscrição de Jogadores':
     col1, col2 = st.columns(2)
     with col1:
       turma_lote = st.text_input('Turma (Ex: 4º ano 01)')
-      escola_lote = st.text_input('Escola', value='Escola Municipal')
+      escola_lote = st.text_input(
+          'Escola', value='EBM Denise Christiane Harms'
+      )
     with col2:
       categoria_lote = st.selectbox(
           'Categoria', ['Sub-10', 'Sub-12', 'Sub-14', 'Sub-18', 'Livre']
@@ -211,7 +226,7 @@ if aba == '👥 Inscrição de Jogadores':
     with col1:
       nome = st.text_input('Nome do Aluno')
       turma = st.text_input('Turma (Ex: 4º ano 01)')
-      escola = st.text_input('Escola', value='Escola Municipal')
+      escola = st.text_input('Escola', value='EBM Denise Christiane Harms')
     with col2:
       categoria = st.selectbox(
           'Categoria', ['Sub-10', 'Sub-12', 'Sub-14', 'Sub-18', 'Livre']
@@ -297,7 +312,7 @@ if aba == '👥 Inscrição de Jogadores':
   st.dataframe(df_jogadores, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# ABA 2: EMPARCEIRAMENTO E LANÇAMENTO DE RESULTADOS (GARANTIA DO BOTÃO)
+# ABA 2: EMPARCEIRAMENTO E LANÇAMENTO DE RESULTADOS
 # -----------------------------------------------------------------------------
 elif aba == '⚔️ Emparceiramento & Partidas':
   with get_connection() as conn:
@@ -322,20 +337,17 @@ elif aba == '⚔️ Emparceiramento & Partidas':
     with get_connection() as conn:
       cursor = conn.cursor()
 
-      # Total de alunos cadastrados nesta turma
       cursor.execute(
           'SELECT COUNT(*) FROM jogadores WHERE turma = ?;', (turma_nome,)
       )
       total_alunos_turma = cursor.fetchone()[0]
 
-      # Maior rodada cadastrada
       cursor.execute(
           'SELECT MAX(rodada) FROM partidas WHERE torneio_id = ?;', (torneio_id,)
       )
       res_max = cursor.fetchone()[0]
       max_rodada = res_max if res_max is not None else 0
 
-      # Partidas sem resultado na última rodada
       cursor.execute(
           'SELECT COUNT(*) FROM partidas WHERE torneio_id = ? AND rodada = ?'
           ' AND resultado IS NULL;',
@@ -347,12 +359,11 @@ elif aba == '⚔️ Emparceiramento & Partidas':
 
     st.header(f'⚔️ {torneio_selecionado} — Rodada {rodada_ativa}')
 
-    # VERIFICAÇÕES DE SEGURANÇA E EXIBIÇÃO DO BOTÃO
     if total_alunos_turma < 2:
       st.error(
           f'⚠️ A turma "{turma_nome}" possui apenas {total_alunos_turma}'
-          ' aluno(s) cadastrado(s). Cadastre pelo menos 2 alunos na aba'
-          ' "👥 Inscrição de Jogadores" para iniciar o torneio.'
+          ' aluno(s) cadastrado(s). Cadastre pelo menos 2 alunos para iniciar o'
+          ' torneio.'
       )
     elif partidas_pendentes:
       st.warning(
@@ -360,7 +371,6 @@ elif aba == '⚔️ Emparceiramento & Partidas':
           ' confirme os resultados abaixo para liberar a próxima rodada.'
       )
     else:
-      # Exibe o botão de gerar rodada
       if st.button(
           f'🚀 Gerar Emparceiramento — Rodada {rodada_ativa}',
           type='primary',
@@ -438,7 +448,6 @@ elif aba == '⚔️ Emparceiramento & Partidas':
           st.success(f'Rodada {rodada_ativa} gerada!')
           st.rerun()
 
-    # BUSCAR E EXIBIR PARTIDAS DA RODADA VISUALIZADA
     rodada_exibir = max_rodada if max_rodada > 0 else 1
     with get_connection() as conn:
       cursor = conn.cursor()
@@ -584,112 +593,199 @@ elif aba == '⚔️ Emparceiramento & Partidas':
           st.rerun()
 
 # -----------------------------------------------------------------------------
-# ABA 3: CLASSIFICAÇÃO POR TURMA
+# ABA 3: RANKING POR TURMA E RANKING GERAL
 # -----------------------------------------------------------------------------
-elif aba == '📊 Classificação por Turma & Rodada':
-  st.header('🏆 Classificação do Torneio por Turma')
+elif aba == '📊 Classificação & Ranking':
+  st.header('🏆 Quadro de Classificação & Rankings')
 
-  with get_connection() as conn:
-    df_turmas = pd.read_sql_query(
-        'SELECT DISTINCT turma FROM jogadores;', conn
+  tab_turma, tab_geral = st.tabs(
+      ['🏫 Ranking por Turma', '🌍 Ranking Geral (Escola)']
+  )
+
+  # ---------------------------------------------------------------------------
+  # TAB 1: RANKING POR TURMA
+  # ---------------------------------------------------------------------------
+  with tab_turma:
+    with get_connection() as conn:
+      df_turmas = pd.read_sql_query(
+          'SELECT DISTINCT turma FROM jogadores;', conn
+      )
+
+    if df_turmas.empty:
+      st.info('Nenhum aluno cadastrado no banco de dados.')
+    else:
+      col_f1, col_f2 = st.columns([2, 2])
+      with col_f1:
+        turma_filtro = st.selectbox(
+            'Selecione a Turma:', df_turmas['turma'].tolist()
+        )
+      with col_f2:
+        busca_nome_t = st.text_input('🔍 Buscar Aluno na Turma:')
+
+      with get_connection() as conn:
+        query_t = """
+                    SELECT nome AS [Nome do Aluno], turma AS [Turma], 
+                           pontos AS [Pontos], vitorias AS [Vitórias (V)], 
+                           empates AS [Empates (E)], derrotas AS [Derrotas (D)],
+                           rating_inicial AS [Elo Inicial], rating_atual AS [Elo Atual],
+                           (rating_atual - rating_inicial) AS [Variação Elo]
+                    FROM jogadores
+                    WHERE turma = ?
+                """
+        params_t = [turma_filtro]
+
+        if busca_nome_t.strip():
+          query_t += ' AND nome LIKE ?'
+          params_t.append(f'%{busca_nome_t.strip()}%')
+
+        query_t += ' ORDER BY pontos DESC, vitorias DESC, rating_atual DESC;'
+
+        df_classif_turma = pd.read_sql_query(query_t, conn, params=params_t)
+
+      if not df_classif_turma.empty:
+        st.subheader(f'🥇 Pódio — {turma_filtro}')
+        col_p1, col_p2, col_p3 = st.columns(3)
+
+        if len(df_classif_turma) >= 1:
+          j1 = df_classif_turma.iloc[0]
+          col_p1.metric(
+              label='🥇 1º Lugar',
+              value=j1['Nome do Aluno'],
+              delta=(
+                  f"{j1['Pontos']} pts | {j1['Vitórias (V)']}V-{j1['Empates (E)']}E-{j1['Derrotas (D)']}D"
+              ),
+          )
+
+        if len(df_classif_turma) >= 2:
+          j2 = df_classif_turma.iloc[1]
+          col_p2.metric(
+              label='🥈 2º Lugar',
+              value=j2['Nome do Aluno'],
+              delta=(
+                  f"{j2['Pontos']} pts | {j2['Vitórias (V)']}V-{j2['Empates (E)']}E-{j2['Derrotas (D)']}D"
+              ),
+          )
+
+        if len(df_classif_turma) >= 3:
+          j3 = df_classif_turma.iloc[2]
+          col_p3.metric(
+              label='🥉 3º Lugar',
+              value=j3['Nome do Aluno'],
+              delta=(
+                  f"{j3['Pontos']} pts | {j3['Vitórias (V)']}V-{j3['Empates (E)']}E-{j3['Derrotas (D)']}D"
+              ),
+          )
+
+        st.write('---')
+        st.subheader(f'📜 Tabela Oficial — {turma_filtro}')
+
+        df_exibir_t = df_classif_turma.copy()
+        df_exibir_t.index = range(1, len(df_exibir_t) + 1)
+        df_exibir_t.index.name = 'Posição'
+
+        st.dataframe(df_exibir_t, use_container_width=True)
+
+        csv_t = df_exibir_t.to_csv(index=True).encode('utf-8')
+        st.download_button(
+            label=f'📥 Baixar Ranking do {turma_filtro} (CSV)',
+            data=csv_t,
+            file_name=(
+                f'ranking_{turma_filtro.lower().replace(" ", "_")}.csv'
+            ),
+            mime='text/csv',
+            use_container_width=True,
+        )
+
+  # ---------------------------------------------------------------------------
+  # TAB 2: RANKING GERAL (ESCOLA INTEIRA)
+  # ---------------------------------------------------------------------------
+  with tab_geral:
+    st.subheader(
+        '🌍 Ranking Geral Unificado (EBM Denise Christiane Harms)'
     )
 
-  if df_turmas.empty:
-    st.info('Nenhum aluno cadastrado no banco de dados.')
-  else:
-    turmas_list = ['Todas as Turmas'] + df_turmas['turma'].tolist()
-
-    col_f1, col_f2 = st.columns([2, 2])
-    with col_f1:
-      turma_filtro = st.selectbox('🏫 Filtrar por Turma:', turmas_list)
-    with col_f2:
-      busca_nome = st.text_input('🔍 Buscar Aluno por Nome:')
+    busca_nome_g = st.text_input('🔍 Buscar Aluno no Ranking Geral:')
 
     with get_connection() as conn:
-      query = """
-                SELECT nome AS [Nome do Aluno], turma AS [Turma], 
+      query_g = """
+                SELECT nome AS [Nome do Aluno], turma AS [Turma], escola AS [Escola],
                        pontos AS [Pontos], vitorias AS [Vitórias (V)], 
                        empates AS [Empates (E)], derrotas AS [Derrotas (D)],
                        rating_inicial AS [Elo Inicial], rating_atual AS [Elo Atual],
                        (rating_atual - rating_inicial) AS [Variação Elo]
                 FROM jogadores
             """
-      condicoes = []
-      params = []
+      params_g = []
 
-      if turma_filtro != 'Todas as Turmas':
-        condicoes.append('turma = ?')
-        params.append(turma_filtro)
+      if busca_nome_g.strip():
+        query_g += ' WHERE nome LIKE ?'
+        params_g.append(f'%{busca_nome_g.strip()}%')
 
-      if busca_nome.strip():
-        condicoes.append('nome LIKE ?')
-        params.append(f'%{busca_nome.strip()}%')
+      query_g += ' ORDER BY pontos DESC, vitorias DESC, rating_atual DESC;'
 
-      if condicoes:
-        query += ' WHERE ' + ' AND '.join(condicoes)
+      df_classif_geral = pd.read_sql_query(query_g, conn, params=params_g)
 
-      query += ' ORDER BY pontos DESC, vitorias DESC, rating_atual DESC;'
+    if not df_classif_geral.empty:
+      m1, m2, m3 = st.columns(3)
+      m1.metric('👥 Total de Alunos', len(df_classif_geral))
+      m2.metric(
+          '🏫 Total de Turmas', df_classif_geral['Turma'].nunique()
+      )
+      m3.metric('⭐ Maior Rating Elo', int(df_classif_geral['Elo Atual'].max()))
 
-      df_classificacao = pd.read_sql_query(query, conn, params=params)
+      st.write('---')
 
-    if not df_classificacao.empty:
-      st.subheader('🥇 Pódio da Turma')
-      col_p1, col_p2, col_p3 = st.columns(3)
+      st.subheader('👑 Top 3 Geral da Escola')
+      col_g1, col_g2, col_g3 = st.columns(3)
 
-      if len(df_classificacao) >= 1:
-        j1 = df_classificacao.iloc[0]
-        col_p1.metric(
-            label='🥇 1º Lugar',
-            value=j1['Nome do Aluno'],
-            delta=(
-                f"{j1['Pontos']} pts | {j1['Vitórias (V)']}V-{j1['Empates (E)']}E-{j1['Derrotas (D)']}D"
-            ),
+      if len(df_classif_geral) >= 1:
+        g1 = df_classif_geral.iloc[0]
+        col_g1.metric(
+            label='🥇 1º Lugar Geral',
+            value=f"{g1['Nome do Aluno']} ({g1['Turma']})",
+            delta=f"{g1['Pontos']} pts | Elo {g1['Elo Atual']}",
         )
 
-      if len(df_classificacao) >= 2:
-        j2 = df_classificacao.iloc[1]
-        col_p2.metric(
-            label='🥈 2º Lugar',
-            value=j2['Nome do Aluno'],
-            delta=(
-                f"{j2['Pontos']} pts | {j2['Vitórias (V)']}V-{j2['Empates (E)']}E-{j2['Derrotas (D)']}D"
-            ),
+      if len(df_classif_geral) >= 2:
+        g2 = df_classif_geral.iloc[1]
+        col_g2.metric(
+            label='🥈 2º Lugar Geral',
+            value=f"{g2['Nome do Aluno']} ({g2['Turma']})",
+            delta=f"{g2['Pontos']} pts | Elo {g2['Elo Atual']}",
         )
 
-      if len(df_classificacao) >= 3:
-        j3 = df_classificacao.iloc[2]
-        col_p3.metric(
-            label='🥉 3º Lugar',
-            value=j3['Nome do Aluno'],
-            delta=(
-                f"{j3['Pontos']} pts | {j3['Vitórias (V)']}V-{j3['Empates (E)']}E-{j3['Derrotas (D)']}D"
-            ),
+      if len(df_classif_geral) >= 3:
+        g3 = df_classif_geral.iloc[2]
+        col_g3.metric(
+            label='🥉 3º Lugar Geral',
+            value=f"{g3['Nome do Aluno']} ({g3['Turma']})",
+            delta=f"{g3['Pontos']} pts | Elo {g3['Elo Atual']}",
         )
 
       st.write('---')
-      st.subheader('📜 Tabela Geral de Classificação')
+      st.subheader('📜 Tabela de Classificação Geral')
 
-      df_exibir = df_classificacao.copy()
-      df_exibir.index = range(1, len(df_exibir) + 1)
-      df_exibir.index.name = 'Posição'
+      df_exibir_g = df_classif_geral.copy()
+      df_exibir_g.index = range(1, len(df_exibir_g) + 1)
+      df_exibir_g.index.name = 'Posição Geral'
 
-      st.dataframe(df_exibir, use_container_width=True)
+      st.dataframe(df_exibir_g, use_container_width=True)
 
-      csv = df_exibir.to_csv(index=True).encode('utf-8')
+      csv_g = df_exibir_g.to_csv(index=True).encode('utf-8')
       st.download_button(
-          label='📥 Baixar Tabela em CSV',
-          data=csv,
-          file_name=(
-              f'classificacao_{turma_filtro.lower().replace(" ", "_")}.csv'
-          ),
+          label='📥 Baixar Ranking Geral da Escola (CSV)',
+          data=csv_g,
+          file_name='ranking_geral_escola.csv',
           mime='text/csv',
           use_container_width=True,
       )
+    else:
+      st.info('Nenhum aluno cadastrado no momento.')
 
 # -----------------------------------------------------------------------------
 # ABA 4: CRONÔMETRO
 # -----------------------------------------------------------------------------
-elif aba == '⏱️ Cronômetro da Sala':
+elif aba == '⏱️️ Cronômetro da Sala':
   st.subheader('⏱️ Temporizador da Rodada (Projeção)')
   minutos = st.number_input(
       'Tempo da Rodada (minutos):', min_value=1, max_value=120, value=15, step=1
