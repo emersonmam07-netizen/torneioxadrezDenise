@@ -149,14 +149,14 @@ aba = st.sidebar.radio(
     'Navegação',
     [
         '👥 Inscrição de Jogadores',
-        '⚔️️ Emparceiramento & Partidas',
+        '⚔️ Emparceiramento & Partidas',
         '📊 Classificação & Ranking',
         '⏱️ Cronômetro da Sala',
     ],
 )
 
 # -----------------------------------------------------------------------------
-# ABA 1: INSCRIÇÃO DE JOGADORES (COM EXCLUSÃO INDIVIDUAL)
+# ABA 1: INSCRIÇÃO DE JOGADORES
 # -----------------------------------------------------------------------------
 if aba == '👥 Inscrição de Jogadores':
   st.header('Cadastrar Alunos e Criar Torneios por Turma')
@@ -288,9 +288,8 @@ if aba == '👥 Inscrição de Jogadores':
     st.write('### ⚙️ Gerenciamento e Exclusão')
     if not df_jogadores.empty:
 
-      # 1. EXCLUIR APENAS UM ALUNO (NOVO)
+      # EXCLUIR ALUNO INDIVIDUAL
       st.markdown('#### 👤 Excluir um Aluno Específico')
-      # Cria rótulo amigável: "Nome do Aluno (Turma)"
       df_jogadores['label_aluno'] = (
           df_jogadores['nome'] + ' (' + df_jogadores['turma'] + ')'
       )
@@ -307,12 +306,10 @@ if aba == '👥 Inscrição de Jogadores':
       if st.button('🗑️ Excluir Aluno Selecionado', type='secondary'):
         with get_connection() as conn:
           cursor = conn.cursor()
-          # Excluir partidas vinculadas ao aluno
           cursor.execute(
               'DELETE FROM partidas WHERE brancas_id = ? OR pretas_id = ?;',
               (aluno_id_del, aluno_id_del),
           )
-          # Excluir jogador
           cursor.execute(
               'DELETE FROM jogadores WHERE id = ?;', (aluno_id_del,)
           )
@@ -322,7 +319,7 @@ if aba == '👥 Inscrição de Jogadores':
 
       st.write('---')
 
-      # 2. EXCLUIR UMA TURMA INTEIRA
+      # EXCLUIR TURMA INTEIRA
       st.markdown('#### 🏫 Excluir Turma Inteira')
       turmas_existentes = df_jogadores['turma'].unique().tolist()
       turma_del = st.selectbox(
@@ -348,7 +345,7 @@ if aba == '👥 Inscrição de Jogadores':
 
       st.write('---')
 
-      # 3. RESETAR BANCO DE DADOS COMPLETO
+      # RESETAR BANCO DE DADOS
       if st.button('💥 RESETAR TODO O BANCO DE DADOS', type='primary'):
         with get_connection() as conn:
           cursor = conn.cursor()
@@ -411,7 +408,7 @@ elif aba == '⚔️ Emparceiramento & Partidas':
 
     if total_alunos_turma < 2:
       st.error(
-          f'⚠️️ A turma "{turma_nome}" possui apenas {total_alunos_turma}'
+          f'⚠️ A turma "{turma_nome}" possui apenas {total_alunos_turma}'
           ' aluno(s) cadastrado(s). Cadastre pelo menos 2 alunos para iniciar o'
           ' torneio.'
       )
@@ -652,9 +649,7 @@ elif aba == '📊 Classificação & Ranking':
       ['🏫 Ranking por Turma', '🌍 Ranking Geral (Escola)']
   )
 
-  # ---------------------------------------------------------------------------
   # TAB 1: RANKING POR TURMA
-  # ---------------------------------------------------------------------------
   with tab_turma:
     with get_connection() as conn:
       df_turmas = pd.read_sql_query(
@@ -746,9 +741,7 @@ elif aba == '📊 Classificação & Ranking':
             use_container_width=True,
         )
 
-  # ---------------------------------------------------------------------------
   # TAB 2: RANKING GERAL (ESCOLA INTEIRA)
-  # ---------------------------------------------------------------------------
   with tab_geral:
     st.subheader(
         '🌍 Ranking Geral Unificado (EBM Denise Christiane Harms)'
