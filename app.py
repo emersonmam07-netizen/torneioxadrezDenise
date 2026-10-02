@@ -7,7 +7,7 @@ import streamlit.components.v1 as components
 DB_NAME = 'torneio_xadrez.db'
 
 # -----------------------------------------------------------------------------
-# 1. BANCO DE DADOS (SQLITE + ESTRUTURA COMPLETA DE ESTATÍSTICAS)
+# 1. BANCO DE DADOS (SQLITE + ESTRUTURA COMPLETA)
 # -----------------------------------------------------------------------------
 
 
@@ -108,7 +108,7 @@ class SistemaElo:
       cls, rating_a: int, rating_b: int, resultado: float, k_factor: int = 32
   ) -> tuple[int, int]:
     exp_a = cls.calcular_expectativa(rating_a, rating_b)
-    exp_b = cls.calcular_expectativa(rating_b, rating_a)
+    exp_b = cls.calcular_expectativa(rating_a, rating_b)
 
     var_a = round(k_factor * (resultado - exp_a))
     var_b = round(k_factor * ((1.0 - resultado) - exp_b))
@@ -128,7 +128,7 @@ aba = st.sidebar.radio(
     'Navegação',
     [
         '👥 Inscrição de Jogadores',
-        '⚔️️ Emparceiramento & Partidas',
+        '⚔️ Emparceiramento & Partidas',
         '📊 Classificação por Turma & Rodada',
         '⏱️ Cronômetro da Sala',
     ],
@@ -297,7 +297,7 @@ if aba == '👥 Inscrição de Jogadores':
   st.dataframe(df_jogadores, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# ABA 2: EMPARCEIRAMENTO E LANÇAMENTO DE RESULTADOS (CORRIGIDO)
+# ABA 2: EMPARCEIRAMENTO E LANÇAMENTO DE RESULTADOS (BLOCO CORRIGIDO)
 # -----------------------------------------------------------------------------
 elif aba == '⚔️ Emparceiramento & Partidas':
   with get_connection() as conn:
@@ -325,14 +325,15 @@ elif aba == '⚔️ Emparceiramento & Partidas':
       cursor.execute(
           'SELECT MAX(rodada) FROM partidas WHERE torneio_id = ?;', (torneio_id,)
       )
-      max_rodada = cursor.fetchone()[0] or 0
+      res_max = cursor.fetchone()[0]
+      max_rodada = res_max if res_max is not None else 0
 
       cursor.execute(
           'SELECT COUNT(*) FROM partidas WHERE torneio_id = ? AND rodada = ?'
           ' AND resultado IS NULL;',
           (torneio_id, max_rodada),
       )
-      partidas_pendentes = cursor.fetchone()[0] > 0
+      partidas_pendentes = (cursor.fetchone()[0] > 0) if max_rodada > 0 else False
 
     rodada_ativa = max_rodada if partidas_pendentes else max_rodada + 1
     st.header(f'⚔️ {torneio_selecionado} — Rodada {rodada_ativa}')
@@ -359,13 +360,14 @@ elif aba == '⚔️ Emparceiramento & Partidas':
           else:
             df_hist = pd.read_sql_query(
                 'SELECT brancas_id, pretas_id FROM partidas WHERE torneio_id'
-                ' = ? AND pretas_id IS NOT NULL;',
+                ' = ? AND pretas_id IS NOT NULL AND brancas_id IS NOT NULL;',
                 conn,
                 params=(torneio_id,),
             )
-            historico_pares = set(
-                zip(df_hist['brancas_id'], df_hist['pretas_id'])
-            ) | set(zip(df_hist['pretas_id'], df_hist['brancas_id']))
+            historico_pares = set()
+            for _, row_h in df_hist.iterrows():
+              historico_pares.add((int(row_h['brancas_id']), int(row_h['pretas_id'])))
+              historico_pares.add((int(row_h['pretas_id']), int(row_h['brancas_id'])))
 
             livres = df_j.to_dict('records')
             confrontos = []
@@ -555,7 +557,7 @@ elif aba == '⚔️ Emparceiramento & Partidas':
           st.rerun()
 
 # -----------------------------------------------------------------------------
-# ABA 3: CLASSIFICAÇÃO COM VITORIAS / EMPATES / DERROTAS
+# ABA 3: CLASSIFICAÇÃO
 # -----------------------------------------------------------------------------
 elif aba == '📊 Classificação por Turma & Rodada':
   st.header('🏆 Classificação do Torneio por Turma')
@@ -604,7 +606,6 @@ elif aba == '📊 Classificação por Turma & Rodada':
       df_classificacao = pd.read_sql_query(query, conn, params=params)
 
     if not df_classificacao.empty:
-      # PÓDIO TOP 3
       st.subheader('🥇 Pódio da Turma')
       col_p1, col_p2, col_p3 = st.columns(3)
 
